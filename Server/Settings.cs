@@ -44,11 +44,13 @@ public class Settings {
     public FlipTable Flip { get; set; } = new FlipTable();
     public ScenarioTable Scenario { get; set; } = new ScenarioTable();
     public BannedPlayers BanList { get; set; } = new BannedPlayers();
+    public ProximityChatTable ProximityChat { get; set; } = new ProximityChatTable();
     public DiscordTable Discord { get; set; } = new DiscordTable();
 
     public class ServerTable {
         public string Address { get; set; } = IPAddress.Any.ToString();
-        public ushort Port { get; set; } = 1027;
+        public ushort GamePort { get; set; } = 1027;
+	public ushort ChatPort { get; set; } = 48984;
         public ushort MaxPlayers { get; set; } = 8;
     }
 
@@ -66,6 +68,12 @@ public class Settings {
         public bool Enabled { get; set; } = true;
         public List<Guid> Players { get; set; } = new List<Guid>();
         public FlipOptions Pov { get; set; } = FlipOptions.Both;
+    }
+
+    public class ProximityChatTable {
+	public bool Enabled { get; set; } = true;
+	public float SilenceRadius { get; set; } = 10;
+	public float PeakRadius { get; set; } = 3;
     }
 
     public class DiscordTable {
