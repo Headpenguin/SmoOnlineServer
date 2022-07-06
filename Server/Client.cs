@@ -1,6 +1,7 @@
 ﻿using System.Buffers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using Shared;
@@ -20,6 +21,7 @@ public class Client : IDisposable {
 
     public Guid Id;
     public Socket? Socket;
+    public IPEndPoint? ChatEP;
     public Server Server { get; init; }
     public Logger Logger { get; }
 

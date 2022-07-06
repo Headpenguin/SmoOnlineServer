@@ -10,7 +10,8 @@ using Timer = System.Timers.Timer;
 Server.Server server = new Server.Server();
 HashSet<int> shineBag = new HashSet<int>();
 CancellationTokenSource cts = new CancellationTokenSource();
-Task listenTask = server.Listen(cts.Token);
+Task gameListenTask = server.GameListen(cts.Token);
+Task chatListenTask = server.ChatListen(cts.Token);
 Logger consoleLogger = new Logger("Console");
 DiscordBot bot = new DiscordBot();
 await bot.Run();
@@ -510,4 +511,5 @@ Task.Run(() => {
     }
 });
 
-await listenTask;
+await gameListenTask;
+await chatListenTask;

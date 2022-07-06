@@ -1,7 +1,7 @@
 ﻿using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime. InteropServices;
+using System.Runtime.InteropServices;
 using Shared;
 using Shared.Packet;
 using Shared.Packet.Packets;
@@ -15,7 +15,17 @@ public class Server {
     public Func<Client, IPacket, bool>? PacketHandler = null!;
     public event Action<Client, ConnectPacket> ClientJoined = null!;
 
-    public async Task Listen(CancellationToken? token = null) {
+	private struct ReadResult {
+		public bool Success;
+		public EndPoint? ClientEndPoint;
+
+		public void Deconstruct(out bool success, out EndPoint? clientEndPoint) {
+			success = Success;
+			clientEndPoint = ClientEndPoint;
+		}
+	}
+
+    public async Task GameListen(CancellationToken? token = null) {
         Socket serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         serverSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         serverSocket.Bind(new IPEndPoint(IPAddress.Parse(Settings.Instance.Server.Address), Settings.Instance.Server.GamePort));
@@ -41,7 +51,7 @@ public class Server {
         catch (OperationCanceledException) {
             // ignore the exception, it's just for closing the server
 
-            Logger.Info("Server closing");
+            Logger.Info("Game server closing");
 
             try {
                 serverSocket.Shutdown(SocketShutdown.Both);
@@ -53,8 +63,86 @@ public class Server {
                 serverSocket.Close();
             }
 
-            Logger.Info("Server closed");
+            Logger.Info("Game server closed");
         }
+    }
+
+    public async Task ChatListen(CancellationToken? token = null) {
+		Socket serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, 0);
+		serverSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+		serverSocket.Bind(new IPEndPoint(IPAddress.Parse(Settings.Instance.Server.Address), Settings.Instance.Server.ChatPort));
+
+		Logger.Info($"Listening on {serverSocket.LocalEndPoint} (chat)");
+
+/*		PacketHeader header = new PacketHeader {
+			Id = Guid.Empty,
+			Type = PacketType.Unknown,
+			PacketSize = 0,
+		};
+		IMemoryOwner<byte> memory = MemoryPool<byte>.Shared.RentZero(Constants.HeaderSize);
+
+		FillPacket(header, new UnhandledPacket(), memory.Memory);
+*/
+		IPEndPoint clientEP = new IPEndPoint(0, 0);
+
+		byte[] headerBuffer = new Byte[Constants.HeaderSize];
+
+		int total = 0;
+
+		try {
+			while (true) {
+				var (success, currEP) = await Read(serverSocket, (Memory<byte>) headerBuffer, Constants.HeaderSize, 0, clientEP, token);
+				if (!success) 
+					break;
+				Logger.Info($"New chat client with ip {currEP}");
+				PacketHeader header = GetHeader(((Memory<byte>) headerBuffer).Span);
+			
+				IMemoryOwner<byte> packetBuf = memoryPool.Rent(header.PacketSize);
+				Logger.Info($"{header.PacketSize}");
+				if (header.PacketSize > 0) {
+					if (!(await Read(serverSocket, packetBuf.Memory, header.PacketSize, 0, currEP, token)).Success) {
+						Logger.Info("jdnfgjnd");
+						break;
+					}
+				}
+				Logger.Info($"{Constants.HeaderSize}");
+
+				switch (header.Type) {
+
+					case PacketType.ChatInit:
+						ChatInitPacket packet = new ChatInitPacket();
+						packet.Deserialize(packetBuf.Memory.Span[..header.PacketSize]);
+						Logger.Info($"New chat client added for {packet.Name}");
+						break;
+					
+					case PacketType.ChatVoice:
+						break;
+					
+					default:
+						Logger.Warn($"Chat socket received packet of invalid type {header.Type}");
+						packetBuf.Dispose();
+						continue;
+				}
+				
+			}
+		}
+			catch (OperationCanceledException) {
+				// ignore the exception, it's just for closing the server
+
+				Logger.Info("Chat server closing");
+
+				try {
+					serverSocket.Shutdown(SocketShutdown.Both);
+				}
+				catch {
+					// ignored
+				}
+				finally {
+					serverSocket.Close();
+				}
+
+				Logger.Info("Chat server closed");
+			}
     }
 
     public static void FillPacket<T>(PacketHeader header, T packet, Memory<byte> memory) where T : struct, IPacket {
@@ -119,6 +207,38 @@ public class Server {
         return Clients.Find(client => client.Id == id);
     }
 
+	private async Task<bool> Read(Socket socket, Memory<byte> readMem, int readSize, int readOffset, CancellationToken? ct = null) {
+		return (await Read(socket, readMem, readSize, readOffset, null, ct)).Success;
+	}
+
+	private async Task<ReadResult> Read(Socket socket, Memory<byte> readMem, int readSize, int readOffset, EndPoint? ep, CancellationToken? ct) {
+		readSize += readOffset;
+		int size;
+		while (readOffset < readSize) {
+			if(ep != null) {
+				SocketReceiveFromResult r = await (ct == null ? 
+					socket.ReceiveFromAsync(readMem[readOffset..readSize], SocketFlags.None, ep)
+					: socket.ReceiveFromAsync(readMem[readOffset..readSize], SocketFlags.None, ep, ct.Value));
+				ep = r.RemoteEndPoint;
+				size = r.ReceivedBytes;
+			}
+			else size = await (ct == null ? 
+					socket.ReceiveAsync(readMem[readOffset..readSize], SocketFlags.None)
+					: socket.ReceiveAsync(readMem[readOffset..readSize], SocketFlags.None, ct.Value));
+			Logger.Info($"Recieved {size} bytes");
+			
+			if (size == 0) {
+				// treat it as a disconnect and exit
+				Logger.Info($"Socket {ep ?? socket.RemoteEndPoint} disconnected.");
+				if (socket.Connected) await socket.DisconnectAsync(false);
+				return new ReadResult{Success = false, ClientEndPoint = null};
+			}
+
+			readOffset += size;
+		}
+
+		return new ReadResult{Success=true, ClientEndPoint=ep};
+	}
 
     private async void HandleSocket(Socket socket) {
         Client client = new Client(socket) {Server = this};
@@ -131,24 +251,7 @@ public class Server {
             while (true) {
                 memory = memoryPool.Rent(Constants.HeaderSize);
 
-                async Task<bool> Read(Memory<byte> readMem, int readSize, int readOffset) {
-                    readSize += readOffset;
-                    while (readOffset < readSize) {
-                        int size = await socket.ReceiveAsync(readMem[readOffset..readSize], SocketFlags.None);
-                        if (size == 0) {
-                            // treat it as a disconnect and exit
-                            Logger.Info($"Socket {socket.RemoteEndPoint} disconnected.");
-                            if (socket.Connected) await socket.DisconnectAsync(false);
-                            return false;
-                        }
-
-                        readOffset += size;
-                    }
-
-                    return true;
-                }
-
-                if (!await Read(memory.Memory[..Constants.HeaderSize], Constants.HeaderSize, 0))
+                if (!await Read(socket, memory.Memory[..Constants.HeaderSize], Constants.HeaderSize, 0))
                     break;
                 PacketHeader header = GetHeader(memory.Memory.Span[..Constants.HeaderSize]);
                 Range packetRange = Constants.HeaderSize..(Constants.HeaderSize + header.PacketSize);
@@ -157,7 +260,7 @@ public class Server {
                     memory = memoryPool.Rent(Constants.HeaderSize + header.PacketSize);
                     memTemp.Memory.Span[..Constants.HeaderSize].CopyTo(memory.Memory.Span[..Constants.HeaderSize]);
                     memTemp.Dispose();
-                    if (!await Read(memory.Memory, header.PacketSize, Constants.HeaderSize))
+                    if (!await Read(socket, memory.Memory, header.PacketSize, Constants.HeaderSize))
                         break;
                 }
 
