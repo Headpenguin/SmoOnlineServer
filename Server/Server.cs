@@ -1,7 +1,7 @@
 ﻿using System.Buffers;
 using System.Net;
 using System.Net.Sockets;
-using System.Runtime. InteropServices;
+using System.Runtime.InteropServices;
 using Shared;
 using Shared.Packet;
 using Shared.Packet.Packets;
@@ -41,7 +41,7 @@ public class Server {
         catch (OperationCanceledException) {
             // ignore the exception, it's just for closing the server
 
-            Logger.Info("Server closing");
+            Logger.Info("Game server closing");
 
             try {
                 serverSocket.Shutdown(SocketShutdown.Both);
@@ -53,8 +53,86 @@ public class Server {
                 serverSocket.Close();
             }
 
-            Logger.Info("Server closed");
+            Logger.Info("Game server closed");
         }
+    }
+
+    public async Task ChatListen(CancellationToken? token = null) {
+		Socket serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, 0);
+		serverSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+		serverSocket.Bind(new IPEndPoint(IPAddress.Parse(Settings.Instance.Server.Address), Settings.Instance.Server.ChatPort));
+
+		Logger.Info($"Listening on {serverSocket.LocalEndPoint} (chat)");
+
+/*		PacketHeader header = new PacketHeader {
+			Id = Guid.Empty,
+			Type = PacketType.Unknown,
+			PacketSize = 0,
+		};
+		IMemoryOwner<byte> memory = MemoryPool<byte>.Shared.RentZero(Constants.HeaderSize);
+
+		FillPacket(header, new UnhandledPacket(), memory.Memory);
+*/
+		IPEndPoint clientEP = new IPEndPoint(0, 0);
+
+		byte[] headerBuffer = new Byte[Constants.HeaderSize];
+
+		int total = 0;
+
+		try {
+			while (true) {
+				var (success, currEP) = await Read(serverSocket, (Memory<byte>) headerBuffer, Constants.HeaderSize, 0, clientEP, token);
+				if (!success) 
+					break;
+				Logger.Info($"New chat client with ip {currEP}");
+				PacketHeader header = GetHeader(((Memory<byte>) headerBuffer).Span);
+			
+				IMemoryOwner<byte> packetBuf = memoryPool.Rent(header.PacketSize);
+				Logger.Info($"{header.PacketSize}");
+				if (header.PacketSize > 0) {
+					if (!(await Read(serverSocket, packetBuf.Memory, header.PacketSize, 0, currEP, token)).Success) {
+						Logger.Info("jdnfgjnd");
+						break;
+					}
+				}
+				Logger.Info($"{Constants.HeaderSize}");
+
+				switch (header.Type) {
+
+					case PacketType.ChatInit:
+						ChatInitPacket packet = new ChatInitPacket();
+						packet.Deserialize(packetBuf.Memory.Span[..header.PacketSize]);
+						Logger.Info($"New chat client added for {packet.Name}");
+						break;
+					
+					case PacketType.ChatVoice:
+						break;
+					
+					default:
+						Logger.Warn($"Chat socket received packet of invalid type {header.Type}");
+						packetBuf.Dispose();
+						continue;
+				}
+				
+			}
+		}
+			catch (OperationCanceledException) {
+				// ignore the exception, it's just for closing the server
+
+				Logger.Info("Chat server closing");
+
+				try {
+					serverSocket.Shutdown(SocketShutdown.Both);
+				}
+				catch {
+					// ignored
+				}
+				finally {
+					serverSocket.Close();
+				}
+
+				Logger.Info("Chat server closed");
+			}
     }
 
     public static void FillPacket<T>(PacketHeader header, T packet, Memory<byte> memory) where T : struct, IPacket {
