@@ -15,16 +15,6 @@ public class Server {
     public Func<Client, IPacket, bool>? PacketHandler = null!;
     public event Action<Client, ConnectPacket> ClientJoined = null!;
 
-	private struct ReadResult {
-		public bool Success;
-		public EndPoint? ClientEndPoint;
-
-		public void Deconstruct(out bool success, out EndPoint? clientEndPoint) {
-			success = Success;
-			clientEndPoint = ClientEndPoint;
-		}
-	}
-
     public async Task GameListen(CancellationToken? token = null) {
         Socket serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         serverSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
@@ -87,25 +77,24 @@ public class Server {
 
 		byte[] headerBuffer = new Byte[Constants.HeaderSize];
 
-		int total = 0;
+		SocketReceiveFromResult r;
 
 		try {
 			while (true) {
-				var (success, currEP) = await Read(serverSocket, (Memory<byte>) headerBuffer, Constants.HeaderSize, 0, clientEP, token);
-				if (!success) 
+				r = await (token == null ? 
+					serverSocket.ReceiveFromAsync(((Memory<byte>) headerBuffer)[..Constants.HeaderSize], SocketFlags.None, clientEP)
+					: serverSocket.ReceiveFromAsync(((Memory<byte>) headerBuffer)[..Constants.HeaderSize], SocketFlags.None, clientEP, token.Value));
+				
+				if (r.ReceivedBytes != Constants.HeaderSize)
 					break;
-				Logger.Info($"New chat client with ip {currEP}");
+				Logger.Info($"New chat client with ip {r.RemoteEndPoint}");
 				PacketHeader header = GetHeader(((Memory<byte>) headerBuffer).Span);
 			
 				IMemoryOwner<byte> packetBuf = memoryPool.Rent(header.PacketSize);
-				Logger.Info($"{header.PacketSize}");
-				if (header.PacketSize > 0) {
-					if (!(await Read(serverSocket, packetBuf.Memory, header.PacketSize, 0, currEP, token)).Success) {
-						Logger.Info("jdnfgjnd");
+				if (await(token == null ? 
+					serverSocket.ReceiveAsync(packetBuf.Memory[..header.PacketSize], SocketFlags.None)
+					: serverSocket.ReceiveAsync(packetBuf.Memory[..header.PacketSize], SocketFlags.None, token.Value)) != header.PacketSize)
 						break;
-					}
-				}
-				Logger.Info($"{Constants.HeaderSize}");
 
 				switch (header.Type) {
 
@@ -207,38 +196,6 @@ public class Server {
         return Clients.Find(client => client.Id == id);
     }
 
-	private async Task<bool> Read(Socket socket, Memory<byte> readMem, int readSize, int readOffset, CancellationToken? ct = null) {
-		return (await Read(socket, readMem, readSize, readOffset, null, ct)).Success;
-	}
-
-	private async Task<ReadResult> Read(Socket socket, Memory<byte> readMem, int readSize, int readOffset, EndPoint? ep, CancellationToken? ct) {
-		readSize += readOffset;
-		int size;
-		while (readOffset < readSize) {
-			if(ep != null) {
-				SocketReceiveFromResult r = await (ct == null ? 
-					socket.ReceiveFromAsync(readMem[readOffset..readSize], SocketFlags.None, ep)
-					: socket.ReceiveFromAsync(readMem[readOffset..readSize], SocketFlags.None, ep, ct.Value));
-				ep = r.RemoteEndPoint;
-				size = r.ReceivedBytes;
-			}
-			else size = await (ct == null ? 
-					socket.ReceiveAsync(readMem[readOffset..readSize], SocketFlags.None)
-					: socket.ReceiveAsync(readMem[readOffset..readSize], SocketFlags.None, ct.Value));
-			Logger.Info($"Recieved {size} bytes");
-			
-			if (size == 0) {
-				// treat it as a disconnect and exit
-				Logger.Info($"Socket {ep ?? socket.RemoteEndPoint} disconnected.");
-				if (socket.Connected) await socket.DisconnectAsync(false);
-				return new ReadResult{Success = false, ClientEndPoint = null};
-			}
-
-			readOffset += size;
-		}
-
-		return new ReadResult{Success=true, ClientEndPoint=ep};
-	}
 
     private async void HandleSocket(Socket socket) {
         Client client = new Client(socket) {Server = this};
@@ -251,7 +208,24 @@ public class Server {
             while (true) {
                 memory = memoryPool.Rent(Constants.HeaderSize);
 
-                if (!await Read(socket, memory.Memory[..Constants.HeaderSize], Constants.HeaderSize, 0))
+                async Task<bool> Read(Memory<byte> readMem, int readSize, int readOffset) {
+                    readSize += readOffset;
+                    while (readOffset < readSize) {
+                        int size = await socket.ReceiveAsync(readMem[readOffset..readSize], SocketFlags.None);
+                        if (size == 0) {
+                            // treat it as a disconnect and exit
+                            Logger.Info($"Socket {socket.RemoteEndPoint} disconnected.");
+                            if (socket.Connected) await socket.DisconnectAsync(false);
+                            return false;
+                        }
+
+                        readOffset += size;
+                    }
+
+                    return true;
+                }
+
+                if (!await Read(memory.Memory[..Constants.HeaderSize], Constants.HeaderSize, 0))
                     break;
                 PacketHeader header = GetHeader(memory.Memory.Span[..Constants.HeaderSize]);
                 Range packetRange = Constants.HeaderSize..(Constants.HeaderSize + header.PacketSize);
@@ -260,7 +234,7 @@ public class Server {
                     memory = memoryPool.Rent(Constants.HeaderSize + header.PacketSize);
                     memTemp.Memory.Span[..Constants.HeaderSize].CopyTo(memory.Memory.Span[..Constants.HeaderSize]);
                     memTemp.Dispose();
-                    if (!await Read(socket, memory.Memory, header.PacketSize, Constants.HeaderSize))
+                    if (!await Read(memory.Memory, header.PacketSize, Constants.HeaderSize))
                         break;
                 }
 
