@@ -15,7 +15,7 @@ public class Server {
     public Func<Client, IPacket, bool>? PacketHandler = null!;
     public event Action<Client, ConnectPacket> ClientJoined = null!;
 
-    public async Task Listen(CancellationToken? token = null) {
+    public async Task GameListen(CancellationToken? token = null) {
         Socket serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         serverSocket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         serverSocket.Bind(new IPEndPoint(IPAddress.Parse(Settings.Instance.Server.Address), Settings.Instance.Server.GamePort));
@@ -77,25 +77,24 @@ public class Server {
 
 		byte[] headerBuffer = new Byte[Constants.HeaderSize];
 
-		int total = 0;
+		SocketReceiveFromResult r;
 
 		try {
 			while (true) {
-				var (success, currEP) = await Read(serverSocket, (Memory<byte>) headerBuffer, Constants.HeaderSize, 0, clientEP, token);
-				if (!success) 
+				r = await (token == null ? 
+					serverSocket.ReceiveFromAsync(((Memory<byte>) headerBuffer)[..Constants.HeaderSize], SocketFlags.None, clientEP)
+					: serverSocket.ReceiveFromAsync(((Memory<byte>) headerBuffer)[..Constants.HeaderSize], SocketFlags.None, clientEP, token.Value));
+				
+				if (r.ReceivedBytes != Constants.HeaderSize)
 					break;
-				Logger.Info($"New chat client with ip {currEP}");
+				Logger.Info($"New chat client with ip {r.RemoteEndPoint}");
 				PacketHeader header = GetHeader(((Memory<byte>) headerBuffer).Span);
 			
 				IMemoryOwner<byte> packetBuf = memoryPool.Rent(header.PacketSize);
-				Logger.Info($"{header.PacketSize}");
-				if (header.PacketSize > 0) {
-					if (!(await Read(serverSocket, packetBuf.Memory, header.PacketSize, 0, currEP, token)).Success) {
-						Logger.Info("jdnfgjnd");
+				if (await(token == null ? 
+					serverSocket.ReceiveAsync(packetBuf.Memory[..header.PacketSize], SocketFlags.None)
+					: serverSocket.ReceiveAsync(packetBuf.Memory[..header.PacketSize], SocketFlags.None, token.Value)) != header.PacketSize)
 						break;
-					}
-				}
-				Logger.Info($"{Constants.HeaderSize}");
 
 				switch (header.Type) {
 
