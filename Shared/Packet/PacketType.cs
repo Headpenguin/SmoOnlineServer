@@ -13,6 +13,7 @@ public enum PacketType : short {
     Shine,
     Capture,
     ChangeStage,
+    ChatConnect,
     ChatInit,
     ChatVoice,
     Command

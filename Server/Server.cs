@@ -98,10 +98,44 @@ public class Server {
 
 				switch (header.Type) {
 
-					case PacketType.ChatInit:
-						ChatInitPacket packet = new ChatInitPacket();
-						packet.Deserialize(packetBuf.Memory.Span[..header.PacketSize]);
-						Logger.Info($"New chat client added for {packet.Name}");
+					case PacketType.ChatConnect:
+						IPEndPoint? currEP = null;
+						string? currIP = null;
+						ChatConnectPacket inPacket = new ChatConnectPacket();
+						inPacket.Deserialize(packetBuf.Memory.Span[..header.PacketSize]);
+						
+						if(r.RemoteEndPoint is IPEndPoint ep) {
+							currEP = ep;
+							currIP = ep.Address.ToString();
+						}
+
+						lock(Clients) {
+							//Check if there is a game client with a matching name, and if so, whether it is not already bound to a chat client
+							if(Clients.Find(c => c.Name == inPacket.Name) is Client gameClient && ((gameClient.ChatEP is null) || (gameClient.ChatEP.Address.ToString() == currIP))) {
+								gameClient.ChatEP = currEP;
+
+								ChatInitPacket outPacket = new ChatInitPacket(Settings.Instance.ProximityChat.SilenceRadius, Settings.Instance.ProximityChat.PeakRadius);
+
+								PacketHeader responseHeader = new PacketHeader {
+									Id = gameClient.Id,
+									Type = PacketType.ChatInit,
+									PacketSize = outPacket.Size,
+								};
+
+								Logger.Warn($"{responseHeader.Id}");
+
+								IMemoryOwner<byte> memory = memoryPool.Rent(Constants.HeaderSize + outPacket.Size);
+
+								FillPacket(responseHeader, outPacket, memory.Memory);
+
+								SendToAsyncAndDispose(serverSocket, memory, gameClient.ChatEP, token);
+
+								Logger.Info($"New chat client added for {gameClient.Name}");
+
+							}
+							
+							else Logger.Warn($"New chat client failed to join with name {inPacket.Name}");
+						}
 						break;
 					
 					case PacketType.ChatVoice:
@@ -133,6 +167,22 @@ public class Server {
 				Logger.Info("Chat server closed");
 			}
     }
+
+	private async Task<bool> SendToAsyncAndDispose(Socket socket, IMemoryOwner<byte> buf, EndPoint ep, CancellationToken? ct) {
+		int sent = await(ct == null ? socket.SendToAsync(buf.Memory[..Constants.HeaderSize], SocketFlags.None, ep)
+			: socket.SendToAsync(buf.Memory[..Constants.HeaderSize], SocketFlags.None, ep, ct.Value));
+		if(sent < Constants.HeaderSize) {
+			buf.Dispose();
+			return false;
+		}
+		sent = await(ct == null ? socket.SendToAsync(buf.Memory[Constants.HeaderSize..], SocketFlags.None, ep)
+			: socket.SendToAsync(buf.Memory[Constants.HeaderSize..], SocketFlags.None, ep, ct.Value));
+		Logger.Warn($"{BitConverter.ToString(buf.Memory.ToArray())}");
+		buf.Dispose();
+		if(sent < buf.Memory.Length - Constants.HeaderSize) 
+			return false;
+		return true;
+	}
 
     public static void FillPacket<T>(PacketHeader header, T packet, Memory<byte> memory) where T : struct, IPacket {
         Span<byte> data = memory.Span;

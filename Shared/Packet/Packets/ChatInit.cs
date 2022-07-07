@@ -1,28 +1,27 @@
-using System.Text;
+using System.Runtime.InteropServices;
 
 namespace Shared.Packet.Packets;
 
 [Packet(PacketType.ChatInit)]
 public struct ChatInitPacket : IPacket {
-	public short Size { get; }
-	public string Name;
-	
-	public ChatInitPacket(string name) {
-		Name = name;
-		int tmpSize = Name.Length * 2;
-		if (tmpSize > Int16.MaxValue) {
-			throw new OverflowException();
-		}
-		Size = (short) tmpSize;
+	public short Size { get; } = 8;
+
+	public float SilenceDistance;
+	public float PeakDistance;
+
+	public ChatInitPacket(float silenceDistance, float peakDistance) {
+		SilenceDistance = silenceDistance;
+		PeakDistance = peakDistance;
 	}
-	
+
 	public void Serialize(Span<byte> data) {
-		throw new InvalidOperationException("Attempted to serialize a ChatInitPacket, which is only meant to be serialized by the client program.");
+		MemoryMarshal.Write(data, ref SilenceDistance);
+		MemoryMarshal.Write(data[4..], ref PeakDistance);
 	}
 
 	public void Deserialize(ReadOnlySpan<byte> data) {
-		Console.WriteLine(BitConverter.ToString(data.ToArray()));
-		Name = Encoding.UTF8.GetString(data);
+		SilenceDistance = MemoryMarshal.Read<float>(data);
+		PeakDistance = MemoryMarshal.Read<float>(data);
 	}
 }
 
