@@ -2,6 +2,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Numerics;
 using Shared;
 using Shared.Packet;
 using Shared.Packet.Packets;
@@ -87,7 +88,6 @@ public class Server {
 				
 				if (r.ReceivedBytes != Constants.HeaderSize)
 					break;
-				Logger.Info($"New chat client with ip {r.RemoteEndPoint}");
 				PacketHeader header = GetHeader(((Memory<byte>) headerBuffer).Span);
 			
 				IMemoryOwner<byte> packetBuf = memoryPool.Rent(header.PacketSize);
@@ -103,6 +103,7 @@ public class Server {
 						string? currIP = null;
 						ChatConnectPacket inPacket = new ChatConnectPacket();
 						inPacket.Deserialize(packetBuf.Memory.Span[..header.PacketSize]);
+						packetBuf.Dispose();
 						
 						if(r.RemoteEndPoint is IPEndPoint ep) {
 							currEP = ep;
@@ -111,7 +112,7 @@ public class Server {
 
 						lock(Clients) {
 							//Check if there is a game client with a matching name, and if so, whether it is not already bound to a chat client
-							if(Clients.Find(c => c.Name == inPacket.Name) is Client gameClient && ((gameClient.ChatEP is null) || (gameClient.ChatEP.Address.ToString() == currIP))) {
+							if(Clients.Find(c => c.Name == inPacket.Name && c.Connected) is Client gameClient && ((gameClient.ChatEP is null) || (gameClient.ChatEP.Address.ToString() == currIP))) {
 								gameClient.ChatEP = currEP;
 
 								ChatInitPacket outPacket = new ChatInitPacket(Settings.Instance.ProximityChat.SilenceRadius, Settings.Instance.ProximityChat.PeakRadius);
@@ -121,8 +122,6 @@ public class Server {
 									Type = PacketType.ChatInit,
 									PacketSize = outPacket.Size,
 								};
-
-								Logger.Warn($"{responseHeader.Id}");
 
 								IMemoryOwner<byte> memory = memoryPool.Rent(Constants.HeaderSize + outPacket.Size);
 
@@ -139,6 +138,23 @@ public class Server {
 						break;
 					
 					case PacketType.ChatVoice:
+						lock(Clients) {
+							if(Clients.Find(c => c.Id == header.Id && c.Connected && c.Metadata.ContainsKey("position")) is Client gameClient) {
+								Vector3 pos = (Vector3) gameClient.Metadata["position"];
+								List<Client> to = Clients.FindAll(c => c.Connected && c.Metadata.ContainsKey("position") && Vector3.Distance((Vector3)c.Metadata["position"]!, pos) < Settings.Instance.ProximityChat.SilenceRadius && c.ChatEP != null);
+								short size = (short) (header.PacketSize + Constants.HeaderSize);
+								IMemoryOwner<byte> mem = memoryPool.Rent(to.Count * size);
+								for(int i = 0; i < to.Count; i++) {
+									(new Memory<byte>(headerBuffer)).CopyTo(mem.Memory[(Index)(i*size)..]);
+									Logger.Warn($"{i}");
+									packetBuf.Memory[..header.PacketSize].CopyTo(mem.Memory[(Index)(i*size+Constants.HeaderSize)..]);
+									ChatVoicePacket.SetDistance(mem.Memory.Span[(Index)(i*size+Constants.HeaderSize)..], Vector3.Distance((Vector3)to[i].Metadata["position"]!, pos));
+								}
+								List<EndPoint> clientEPs = to.Select(c => (EndPoint)c.ChatEP!).ToList();
+								BroadcastUdp(serverSocket, mem, clientEPs, size, token);
+								packetBuf.Dispose();
+							}
+						}
 						break;
 					
 					default:
@@ -168,20 +184,21 @@ public class Server {
 			}
     }
 
-	private async Task<bool> SendToAsyncAndDispose(Socket socket, IMemoryOwner<byte> buf, EndPoint ep, CancellationToken? ct) {
-		int sent = await(ct == null ? socket.SendToAsync(buf.Memory[..Constants.HeaderSize], SocketFlags.None, ep)
-			: socket.SendToAsync(buf.Memory[..Constants.HeaderSize], SocketFlags.None, ep, ct.Value));
-		if(sent < Constants.HeaderSize) {
-			buf.Dispose();
-			return false;
-		}
-		sent = await(ct == null ? socket.SendToAsync(buf.Memory[Constants.HeaderSize..], SocketFlags.None, ep)
-			: socket.SendToAsync(buf.Memory[Constants.HeaderSize..], SocketFlags.None, ep, ct.Value));
-		Logger.Warn($"{BitConverter.ToString(buf.Memory.ToArray())}");
+	private async Task SendToAsync(Socket socket, Memory<byte> buf, EndPoint ep, CancellationToken? ct) {
+		int sent = await(ct == null ? socket.SendToAsync(buf[..Constants.HeaderSize], SocketFlags.None, ep)
+			: socket.SendToAsync(buf[..Constants.HeaderSize], SocketFlags.None, ep, ct.Value));
+		sent = await(ct == null ? socket.SendToAsync(buf[Constants.HeaderSize..], SocketFlags.None, ep)
+			: socket.SendToAsync(buf[Constants.HeaderSize..], SocketFlags.None, ep, ct.Value));
+	}
+
+	private async Task SendToAsyncAndDispose(Socket socket, IMemoryOwner<byte> buf, EndPoint ep, CancellationToken? ct) {
+		SendToAsync(socket, buf.Memory, ep, ct);
 		buf.Dispose();
-		if(sent < buf.Memory.Length - Constants.HeaderSize) 
-			return false;
-		return true;
+	}
+
+	private async Task BroadcastUdp(Socket socket, IMemoryOwner<byte> packets, List<EndPoint> clients, short size, CancellationToken? ct) {
+		await Task.WhenAll(clients.Select( (c, i) => SendToAsync(socket, packets.Memory[(Index)(i*size)..], c, ct) ) );
+		packets.Dispose();
 	}
 
     public static void FillPacket<T>(PacketHeader header, T packet, Memory<byte> memory) where T : struct, IPacket {

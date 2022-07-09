@@ -62,6 +62,22 @@ async Task S(string n, Guid otherId, Guid ownId) {
         connect.Serialize(connectOwner.Memory.Span[Constants.HeaderSize..(Constants.HeaderSize + connect.Size)]);
         await stream.WriteAsync(connectOwner.Memory[..(Constants.HeaderSize + connect.Size)]);
         connectOwner.Dispose();
+		PlayerPacket setPosition = new PlayerPacket {
+			Position = new Vector3(0, 0, 0),
+			Rotation = new Quaternion(1, 0, 0, 0),
+			Act = 0,
+			SubAct = 0
+		};
+		PacketHeader positionHeader = new PacketHeader {
+			Type = PacketType.Player,
+			Id = ownId,
+			PacketSize = setPosition.Size
+		};
+		IMemoryOwner<byte> positionBuf = MemoryPool<byte>.Shared.Rent(Constants.HeaderSize + setPosition.Size);
+		positionHeader.Serialize(positionBuf.Memory.Span);
+		setPosition.Serialize(positionBuf.Memory.Span[Constants.HeaderSize..]);
+		await stream.WriteAsync(positionBuf.Memory[..(Constants.HeaderSize + setPosition.Size)]);
+		positionBuf.Dispose();
     }
     
     while (true) {

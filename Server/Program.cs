@@ -126,7 +126,9 @@ server.PacketHandler = (c, p) => {
         case PlayerPacket playerPacket when Settings.Instance.Flip.Enabled
                                             && Settings.Instance.Flip.Pov is FlipOptions.Both or FlipOptions.Others
                                             && Settings.Instance.Flip.Players.Contains(c.Id): {
-            playerPacket.Position += Vector3.UnitY * MarioSize((bool) c.Metadata["2d"]);
+			c.Metadata["position"] = playerPacket.Position;
+            
+			playerPacket.Position += Vector3.UnitY * MarioSize((bool) c.Metadata["2d"]);
             playerPacket.Rotation *= Quaternion.CreateFromRotationMatrix(Matrix4x4.CreateRotationX(MathF.PI))
                                      * Quaternion.CreateFromRotationMatrix(Matrix4x4.CreateRotationY(MathF.PI));
             server.Broadcast(playerPacket, c);
@@ -135,8 +137,10 @@ server.PacketHandler = (c, p) => {
         case PlayerPacket playerPacket when Settings.Instance.Flip.Enabled
                                             && Settings.Instance.Flip.Pov is FlipOptions.Both or FlipOptions.Self
                                             && !Settings.Instance.Flip.Players.Contains(c.Id): {
-            server.BroadcastReplace(playerPacket, c, (from, to, sp) => {
-                if (Settings.Instance.Flip.Players.Contains(to.Id)) {
+			c.Metadata["position"] = playerPacket.Position;
+            
+			server.BroadcastReplace(playerPacket, c, (from, to, sp) => {
+				if (Settings.Instance.Flip.Players.Contains(to.Id)) {
                     sp.Position += Vector3.UnitY * MarioSize((bool) c.Metadata["2d"]);
                     sp.Rotation *= Quaternion.CreateFromRotationMatrix(Matrix4x4.CreateRotationX(MathF.PI))
                                    * Quaternion.CreateFromRotationMatrix(Matrix4x4.CreateRotationY(MathF.PI));
@@ -146,6 +150,9 @@ server.PacketHandler = (c, p) => {
             });
             return false;
         }
+		case PlayerPacket playerPacket:
+			c.Metadata["position"] = playerPacket.Position;
+			break;
     }
 
     return true;
