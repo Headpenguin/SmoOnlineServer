@@ -141,7 +141,10 @@ public class Server {
 						lock(Clients) {
 							if(Clients.Find(c => c.Id == header.Id && c.Connected && c.Metadata.ContainsKey("position")) is Client gameClient) {
 								Vector3 pos = (Vector3) gameClient.Metadata["position"];
-								List<Client> to = Clients.FindAll(c => c.Connected && c.Metadata.ContainsKey("position") && Vector3.Distance((Vector3)c.Metadata["position"]!, pos) < Settings.Instance.ProximityChat.SilenceRadius && c.ChatEP != null);
+
+								List<Client> to = Clients.FindAll(c => c.Connected && c.Metadata.ContainsKey("position") && 
+										Vector3.Distance((Vector3)c.Metadata["position"]!, pos) < Settings.Instance.ProximityChat.SilenceRadius && c.ChatEP != null && c != gameClient);
+
 								short size = (short) (header.PacketSize + Constants.HeaderSize);
 								IMemoryOwner<byte> mem = memoryPool.Rent(to.Count * size);
 								for(int i = 0; i < to.Count; i++) {
