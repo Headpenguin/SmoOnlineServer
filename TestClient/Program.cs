@@ -76,6 +76,7 @@ async Task S(string n, Guid otherId, Guid ownId) {
 		IMemoryOwner<byte> positionBuf = MemoryPool<byte>.Shared.Rent(Constants.HeaderSize + setPosition.Size);
 		positionHeader.Serialize(positionBuf.Memory.Span);
 		setPosition.Serialize(positionBuf.Memory.Span[Constants.HeaderSize..]);
+                await Task.Delay(1000);
 		await stream.WriteAsync(positionBuf.Memory[..(Constants.HeaderSize + setPosition.Size)]);
 		positionBuf.Dispose();
     }
