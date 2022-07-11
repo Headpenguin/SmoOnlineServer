@@ -16,6 +16,7 @@ public class Server {
     private readonly MemoryPool<byte> memoryPool = MemoryPool<byte>.Shared;
     public Func<Client, IPacket, bool>? PacketHandler = null!;
     public event Action<Client, ConnectPacket> ClientJoined = null!;
+	private uint CurrentFrame = 0;
 
     public async Task GameListen(CancellationToken? token = null) {
         Socket serverSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -121,7 +122,7 @@ public class Server {
 							if(Clients.Find(c => c.Name == inPacket.Name && c.Connected) is Client gameClient && ((gameClient.ChatEP is null) || (gameClient.ChatEP.Address.ToString() == currIP))) {
 								gameClient.ChatEP = currEP;
 
-								ChatInitPacket outPacket = new ChatInitPacket(Settings.Instance.ProximityChat.SilenceRadius, Settings.Instance.ProximityChat.PeakRadius);
+								ChatInitPacket outPacket = new ChatInitPacket(Settings.Instance.ProximityChat.SilenceRadius, Settings.Instance.ProximityChat.PeakRadius, CurrentFrame);
 
 								PacketHeader responseHeader = new PacketHeader {
 									Id = gameClient.Id,
@@ -144,12 +145,12 @@ public class Server {
 						break;
 					}
 					case PacketType.ChatVoice: {
-						ChatVoicePacket inPacket = new ChatVoicePacket();
-						inPacket.Deserialize(packetBuf.Memory.Span);
+						uint packetFrame = ChatVoicePacket.GetFrame(packetBuf.Memory.Span);
+						CurrentFrame = packetFrame > CurrentFrame ? packetFrame : CurrentFrame;
 						lock(Clients) {
 							if(Clients.Find(c => c.Id == header.Id && c.Connected && c.Metadata.ContainsKey("position")) is Client gameClient) {
 								Vector3 pos = (Vector3) gameClient.Metadata["position"];
-
+								
 								List<Client> to = Clients.FindAll(c => c.Connected && c.Metadata.ContainsKey("position") && 
 										Vector3.Distance((Vector3)c.Metadata["position"]!, pos) < Settings.Instance.ProximityChat.SilenceRadius && c.ChatEP != null /*&& c != gameClient*/);
 
