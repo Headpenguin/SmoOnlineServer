@@ -88,18 +88,23 @@ public class Server {
 					: serverSocket.ReceiveFromAsync(((Memory<byte>) headerBuffer)[..Constants.HeaderSize], SocketFlags.None, clientEP, token.Value));
 				
 				if (r.ReceivedBytes != Constants.HeaderSize)
-					break;
+					continue;
 				PacketHeader header = GetHeader(((Memory<byte>) headerBuffer).Span);
+
+				if(header.PacketSize < 0) {
+					Logger.Warn($"Received invalid packet of size {header.PacketSize} and type {header.Type} with id {header.Id}");
+					continue;
+				}
 			
 				IMemoryOwner<byte> packetBuf = memoryPool.Rent(header.PacketSize);
 				if (await(token == null ? 
 					serverSocket.ReceiveAsync(packetBuf.Memory[..header.PacketSize], SocketFlags.None)
-					: serverSocket.ReceiveAsync(packetBuf.Memory[..header.PacketSize], SocketFlags.None, token.Value)) != header.PacketSize)
-						break;
+					: serverSocket.ReceiveAsync(packetBuf.Memory[..header.PacketSize], SocketFlags.None, token.Value)) != header.PacketSize) 
+						continue;
 
 				switch (header.Type) {
 
-					case PacketType.ChatConnect:
+					case PacketType.ChatConnect: {
 						IPEndPoint? currEP = null;
 						string? currIP = null;
 						ChatConnectPacket inPacket = new ChatConnectPacket();
@@ -137,20 +142,21 @@ public class Server {
 							else Logger.Warn($"New chat client failed to join with name {inPacket.Name}");
 						}
 						break;
-					
-					case PacketType.ChatVoice:
+					}
+					case PacketType.ChatVoice: {
+						ChatVoicePacket inPacket = new ChatVoicePacket();
+						inPacket.Deserialize(packetBuf.Memory.Span);
 						lock(Clients) {
 							if(Clients.Find(c => c.Id == header.Id && c.Connected && c.Metadata.ContainsKey("position")) is Client gameClient) {
 								Vector3 pos = (Vector3) gameClient.Metadata["position"];
 
 								List<Client> to = Clients.FindAll(c => c.Connected && c.Metadata.ContainsKey("position") && 
-										Vector3.Distance((Vector3)c.Metadata["position"]!, pos) < Settings.Instance.ProximityChat.SilenceRadius && c.ChatEP != null && c != gameClient);
+										Vector3.Distance((Vector3)c.Metadata["position"]!, pos) < Settings.Instance.ProximityChat.SilenceRadius && c.ChatEP != null /*&& c != gameClient*/);
 
 								short size = (short) (header.PacketSize + Constants.HeaderSize);
 								IMemoryOwner<byte> mem = memoryPool.Rent(to.Count * size);
 								for(int i = 0; i < to.Count; i++) {
 									(new Memory<byte>(headerBuffer)).CopyTo(mem.Memory[(Index)(i*size)..]);
-									Logger.Warn($"{i}");
 									packetBuf.Memory[..header.PacketSize].CopyTo(mem.Memory[(Index)(i*size+Constants.HeaderSize)..]);
 									ChatVoicePacket.SetDistance(mem.Memory.Span[(Index)(i*size+Constants.HeaderSize)..], Vector3.Distance((Vector3)to[i].Metadata["position"]!, pos));
 								}
@@ -160,7 +166,7 @@ public class Server {
 							}
 						}
 						break;
-					
+					}
 					default:
 						Logger.Warn($"Chat socket received packet of invalid type {header.Type}");
 						packetBuf.Dispose();
