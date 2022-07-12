@@ -67,15 +67,6 @@ public class Server {
 
 		Logger.Info($"Listening on {serverSocket.LocalEndPoint} (chat)");
 
-/*		PacketHeader header = new PacketHeader {
-			Id = Guid.Empty,
-			Type = PacketType.Unknown,
-			PacketSize = 0,
-		};
-		IMemoryOwner<byte> memory = MemoryPool<byte>.Shared.RentZero(Constants.HeaderSize);
-
-		FillPacket(header, new UnhandledPacket(), memory.Memory);
-*/
 		IPEndPoint clientEP = new IPEndPoint(0, 0);
 
 		byte[] packetBuffer = new Byte[Constants.MaxChatVoicePacketSize];
@@ -167,7 +158,6 @@ public class Server {
 			}
 		}
 			catch (OperationCanceledException) {
-				// ignore the exception, it's just for closing the server
 
 				Logger.Info("Chat server closing");
 
