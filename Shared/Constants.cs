@@ -22,6 +22,8 @@ public static class Constants {
 
     public static int HeaderSize { get; } = PacketHeader.StaticSize;
 
+	public static int MaxChatVoicePacketSize { get; } = 2840 + 8 + PacketHeader.StaticSize;
+
     public static readonly Dictionary<string, string> MapNames = new Dictionary<string, string>() {
         {"cap", "CapWorldHomeStage"},
         {"cascade", "WaterfallWorldHomeStage"},

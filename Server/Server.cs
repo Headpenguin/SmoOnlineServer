@@ -78,30 +78,26 @@ public class Server {
 */
 		IPEndPoint clientEP = new IPEndPoint(0, 0);
 
-		byte[] headerBuffer = new Byte[Constants.HeaderSize];
+		byte[] packetBuffer = new Byte[Constants.MaxChatVoicePacketSize];
 
 		SocketReceiveFromResult r;
 
 		try {
 			while (true) {
 				r = await (token == null ? 
-					serverSocket.ReceiveFromAsync(((Memory<byte>) headerBuffer)[..Constants.HeaderSize], SocketFlags.None, clientEP)
-					: serverSocket.ReceiveFromAsync(((Memory<byte>) headerBuffer)[..Constants.HeaderSize], SocketFlags.None, clientEP, token.Value));
+					serverSocket.ReceiveFromAsync(((Memory<byte>) packetBuffer)[..Constants.MaxChatVoicePacketSize], SocketFlags.None, clientEP)
+					: serverSocket.ReceiveFromAsync(((Memory<byte>) packetBuffer)[..Constants.MaxChatVoicePacketSize], SocketFlags.None, clientEP, token.Value));
 				
-				if (r.ReceivedBytes != Constants.HeaderSize)
+				if (r.ReceivedBytes < Constants.HeaderSize) {
+					Logger.Warn("Stupid iodot");	
 					continue;
-				PacketHeader header = GetHeader(((Memory<byte>) headerBuffer).Span);
+				}
+				PacketHeader header = GetHeader(((Memory<byte>) packetBuffer).Span);
 
-				if(header.PacketSize < 0) {
+				if(header.PacketSize < 0 || r.ReceivedBytes < Constants.HeaderSize + header.PacketSize) {
 					Logger.Warn($"Received invalid packet of size {header.PacketSize} and type {header.Type} with id {header.Id}");
 					continue;
 				}
-			
-				IMemoryOwner<byte> packetBuf = memoryPool.Rent(header.PacketSize);
-				if (await(token == null ? 
-					serverSocket.ReceiveAsync(packetBuf.Memory[..header.PacketSize], SocketFlags.None)
-					: serverSocket.ReceiveAsync(packetBuf.Memory[..header.PacketSize], SocketFlags.None, token.Value)) != header.PacketSize) 
-						continue;
 
 				switch (header.Type) {
 
@@ -109,8 +105,7 @@ public class Server {
 						IPEndPoint? currEP = null;
 						string? currIP = null;
 						ChatConnectPacket inPacket = new ChatConnectPacket();
-						inPacket.Deserialize(packetBuf.Memory.Span[..header.PacketSize]);
-						packetBuf.Dispose();
+						inPacket.Deserialize(((Memory<byte>)packetBuffer).Span.Slice(Constants.HeaderSize, header.PacketSize));
 						
 						if(r.RemoteEndPoint is IPEndPoint ep) {
 							currEP = ep;
@@ -130,7 +125,7 @@ public class Server {
 									PacketSize = outPacket.Size,
 								};
 
-								IMemoryOwner<byte> memory = memoryPool.Rent(Constants.HeaderSize + outPacket.Size);
+								IMemoryOwner<byte> memory = memoryPool.RentZero(Constants.HeaderSize + outPacket.Size);
 
 								FillPacket(responseHeader, outPacket, memory.Memory);
 
@@ -145,32 +140,29 @@ public class Server {
 						break;
 					}
 					case PacketType.ChatVoice: {
-						uint packetFrame = ChatVoicePacket.GetFrame(packetBuf.Memory.Span);
+						uint packetFrame = ChatVoicePacket.GetFrame(((Memory<byte>)packetBuffer).Span.Slice(Constants.HeaderSize, header.PacketSize));
 						CurrentFrame = packetFrame > CurrentFrame ? packetFrame : CurrentFrame;
 						lock(Clients) {
 							if(Clients.Find(c => c.Id == header.Id && c.Connected && c.Metadata.ContainsKey("position")) is Client gameClient) {
 								Vector3 pos = (Vector3) gameClient.Metadata["position"];
 								
 								List<Client> to = Clients.FindAll(c => c.Connected && c.Metadata.ContainsKey("position") && 
-										Vector3.Distance((Vector3)c.Metadata["position"]!, pos) < Settings.Instance.ProximityChat.SilenceRadius && c.ChatEP != null /*&& c != gameClient*/);
+										Vector3.Distance((Vector3)c.Metadata["position"]!, pos) < Settings.Instance.ProximityChat.SilenceRadius && c.ChatEP != null && c != gameClient);
 
 								short size = (short) (header.PacketSize + Constants.HeaderSize);
-								IMemoryOwner<byte> mem = memoryPool.Rent(to.Count * size);
+								IMemoryOwner<byte> mem = memoryPool.RentZero(to.Count * size);
 								for(int i = 0; i < to.Count; i++) {
-									(new Memory<byte>(headerBuffer)).CopyTo(mem.Memory[(Index)(i*size)..]);
-									packetBuf.Memory[..header.PacketSize].CopyTo(mem.Memory[(Index)(i*size+Constants.HeaderSize)..]);
+									packetBuffer[..size].CopyTo(mem.Memory[(Index)(i*size)..]);
 									ChatVoicePacket.SetDistance(mem.Memory.Span[(Index)(i*size+Constants.HeaderSize)..], Vector3.Distance((Vector3)to[i].Metadata["position"]!, pos));
 								}
 								List<EndPoint> clientEPs = to.Select(c => (EndPoint)c.ChatEP!).ToList();
 								BroadcastUdp(serverSocket, mem, clientEPs, size, token);
-								packetBuf.Dispose();
 							}
 						}
 						break;
 					}
 					default:
 						Logger.Warn($"Chat socket received packet of invalid type {header.Type}");
-						packetBuf.Dispose();
 						continue;
 				}
 				
@@ -196,10 +188,8 @@ public class Server {
     }
 
 	private async Task SendToAsync(Socket socket, Memory<byte> buf, EndPoint ep, CancellationToken? ct) {
-		int sent = await(ct == null ? socket.SendToAsync(buf[..Constants.HeaderSize], SocketFlags.None, ep)
-			: socket.SendToAsync(buf[..Constants.HeaderSize], SocketFlags.None, ep, ct.Value));
-		sent = await(ct == null ? socket.SendToAsync(buf[Constants.HeaderSize..], SocketFlags.None, ep)
-			: socket.SendToAsync(buf[Constants.HeaderSize..], SocketFlags.None, ep, ct.Value));
+		await(ct == null ? socket.SendToAsync(buf, SocketFlags.None, ep)
+			: socket.SendToAsync(buf, SocketFlags.None, ep, ct.Value));
 	}
 
 	private async Task SendToAsyncAndDispose(Socket socket, IMemoryOwner<byte> buf, EndPoint ep, CancellationToken? ct) {
@@ -208,7 +198,7 @@ public class Server {
 	}
 
 	private async Task BroadcastUdp(Socket socket, IMemoryOwner<byte> packets, List<EndPoint> clients, short size, CancellationToken? ct) {
-		await Task.WhenAll(clients.Select( (c, i) => SendToAsync(socket, packets.Memory[(Index)(i*size)..], c, ct) ) );
+		await Task.WhenAll(clients.Select( (c, i) => SendToAsync(socket, packets.Memory.Slice(i*size, size), c, ct) ) );
 		packets.Dispose();
 	}
 

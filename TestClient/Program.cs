@@ -21,10 +21,14 @@ PacketType[] reboundPackets = {
     // PacketType.Shine
 };
 
+bool disableRebound = false;
+
+float[] positions = {0, 3, 13, 1000, 1006, 0, 0};
+
 string lastCapture = "";
 List<TcpClient> clients = new List<TcpClient>();
 
-async Task S(string n, Guid otherId, Guid ownId) {
+async Task S(string n, Guid otherId, Guid ownId, int idx) {
     Logger logger = new Logger($"Client ({n})");
     TcpClient client = new TcpClient(args[0], 1027);
     clients.Add(client);
@@ -63,7 +67,7 @@ async Task S(string n, Guid otherId, Guid ownId) {
         await stream.WriteAsync(connectOwner.Memory[..(Constants.HeaderSize + connect.Size)]);
         connectOwner.Dispose();
 		PlayerPacket setPosition = new PlayerPacket {
-			Position = new Vector3(0, 0, 0),
+			Position = new Vector3(positions[idx], 0, 0),
 			Rotation = new Quaternion(1, 0, 0, 0),
 			Act = 0,
 			SubAct = 0
@@ -89,7 +93,7 @@ async Task S(string n, Guid otherId, Guid ownId) {
             if (!await Read(owner.Memory, header.PacketSize, Constants.HeaderSize)) return;
         }
         PacketType type = header.Type;
-        if (header.Id != otherId || reboundPackets.All(x => x != type)) {
+        if (header.Id != otherId || reboundPackets.All(x => x != type) || disableRebound) {
             owner.Dispose();
             continue;
         }
@@ -115,7 +119,7 @@ IEnumerable<Task> stuff = Enumerable.Range(0, 7).Select(i => {
     byte[] tmp = temp.ToByteArray();
     tmp[0]++;
     Guid newOwnId = new Guid(tmp);
-    Task task = S($"Sussy {i}", temp, newOwnId);
+    Task task = S($"Sussy {i}", temp, newOwnId, i);
     temp = newOwnId;
     return task;
 });
