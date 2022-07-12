@@ -127,7 +127,7 @@ public class Server {
 
 								FillPacket(responseHeader, outPacket, memory.Memory);
 
-								SendToAsyncAndDispose(serverSocket, memory, gameClient.ChatEP, token);
+								SendToAsyncAndDispose(serverSocket, memory, currEP!, token);
 
 								Logger.Info($"New chat client added for {gameClient.Name}");
 
@@ -142,7 +142,7 @@ public class Server {
 						CurrentFrame = packetFrame > CurrentFrame ? packetFrame : CurrentFrame;
 						lock(Clients) {
 							if(Clients.Find(c => c.Id == header.Id && c.Connected && c.Metadata.ContainsKey("position")) is Client gameClient) {
-								Vector3 pos = (Vector3) gameClient.Metadata["position"];
+								Vector3 pos = (Vector3) gameClient.Metadata["position"]!;
 								
 								List<Client> to = Clients.FindAll(c => c.Connected && c.Metadata.ContainsKey("position") && 
 										Vector3.Distance((Vector3)c.Metadata["position"]!, pos) < Settings.Instance.ProximityChat.SilenceRadius && c.ChatEP != null && c != gameClient);
@@ -191,7 +191,7 @@ public class Server {
 	}
 
 	private async Task SendToAsyncAndDispose(Socket socket, IMemoryOwner<byte> buf, EndPoint ep, CancellationToken? ct) {
-		SendToAsync(socket, buf.Memory, ep, ct);
+		await SendToAsync(socket, buf.Memory, ep, ct);
 		buf.Dispose();
 	}
 

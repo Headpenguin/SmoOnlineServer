@@ -520,4 +520,4 @@ Task.Run(() => {
 
 await gameListenTask;
 if(Settings.Instance.ProximityChat.Enabled)
-	await chatListenTask;
+	await chatListenTask!;
