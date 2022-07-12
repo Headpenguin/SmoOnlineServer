@@ -88,16 +88,14 @@ public class Server {
 					serverSocket.ReceiveFromAsync(((Memory<byte>) packetBuffer)[..Constants.MaxChatVoicePacketSize], SocketFlags.None, clientEP)
 					: serverSocket.ReceiveFromAsync(((Memory<byte>) packetBuffer)[..Constants.MaxChatVoicePacketSize], SocketFlags.None, clientEP, token.Value));
 				
-				if (r.ReceivedBytes < Constants.HeaderSize) {
-					Logger.Warn("Stupid iodot");	
+				if (r.ReceivedBytes < Constants.HeaderSize) 
 					continue;
-				}
+
 				PacketHeader header = GetHeader(((Memory<byte>) packetBuffer).Span);
 
-				if(header.PacketSize < 0 || r.ReceivedBytes < Constants.HeaderSize + header.PacketSize) {
-					Logger.Warn($"Received invalid packet of size {header.PacketSize} and type {header.Type} with id {header.Id}");
+				if(header.PacketSize < 0 || r.ReceivedBytes < Constants.HeaderSize + header.PacketSize) 
 					continue;
-				}
+				
 
 				switch (header.Type) {
 

@@ -11,7 +11,7 @@ Server.Server server = new Server.Server();
 HashSet<int> shineBag = new HashSet<int>();
 CancellationTokenSource cts = new CancellationTokenSource();
 Task gameListenTask = server.GameListen(cts.Token);
-Task chatListenTask = server.ChatListen(cts.Token);
+Task? chatListenTask = Settings.Instance.ProximityChat.Enabled ? server.ChatListen(cts.Token) : null;
 Logger consoleLogger = new Logger("Console");
 DiscordBot bot = new DiscordBot();
 await bot.Run();
@@ -519,4 +519,5 @@ Task.Run(() => {
 });
 
 await gameListenTask;
-await chatListenTask;
+if(Settings.Instance.ProximityChat.Enabled)
+	await chatListenTask;
